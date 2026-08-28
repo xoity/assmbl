@@ -14,6 +14,15 @@ const occasions = ["Casual", "Work", "Dinner", "Date", "Going out", "Formal", "G
 const occasionFormality: Record<string, number> = { Gym: 1, Casual: 2, Date: 3, Dinner: 3, "Going out": 3, Work: 4, Formal: 5 };
 const emptyPersonalization: Personalization = { skinTone: "", eyeColor: "", hairColor: "", preferredStyles: "", colorsToAvoid: "", fitPreference: "", styleBiography: "", completed: false };
 
+function inferredCategory(item: Pick<Garment, "name" | "type" | "category">) {
+  const details = `${item.name} ${item.type}`.toLowerCase();
+  if (/trouser|pants|chino|jeans|denim|shorts|jogger|sweatpant|cargo|legging|skirt/.test(details)) return "Bottoms";
+  if (/polo|t-?shirt|tee|shirt|button.?down|oxford|henley|tank|blouse|crop top|top/.test(details)) return "Tops";
+  if (/sneaker|trainer|shoe|loafer|boot|sandal|slide|mule|heel|flat|derby|slipper/.test(details)) return "Shoes";
+  if (/jacket|coat|blazer|overshirt|parka|bomber|windbreaker|cardigan|gilet|hoodie|sweater|jumper|knit|fleece/.test(details)) return "Jackets";
+  return item.category;
+}
+
 async function requestJson(url: string, init: RequestInit = {}, timeoutMs = 20000): Promise<any> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -44,6 +53,10 @@ async function compressImage(file: File): Promise<string> {
 
 function localOutfit(wardrobe: Garment[], occasion: string, note: string, personalization: Personalization, feedback: OutfitFeedback[] = [], previousItemSets: string[][] = []): Outfit {
   const target = occasionFormality[occasion] ?? 3;
+  const isCompleteOutfit = (items: Garment[]) => {
+    const roles = items.map(inferredCategory);
+    return roles.includes("Tops") && roles.includes("Bottoms") && new Set(roles.filter((role) => ["Tops", "Bottoms", "Shoes", "Jackets"].includes(role))).size === roles.filter((role) => ["Tops", "Bottoms", "Shoes", "Jackets"].includes(role)).length;
+  };
   const isDark = (item: Garment) => /black|charcoal|dark grey|dark gray/.test(item.color.toLowerCase());
   const isNavy = (item: Garment) => /navy|midnight blue|dark blue/.test(item.color.toLowerCase());
   const colorConflict = (candidate: Garment[]) => candidate.some((item) => isNavy(item)) && candidate.some((item) => isDark(item));
@@ -59,9 +72,9 @@ function localOutfit(wardrobe: Garment[], occasion: string, note: string, person
     return score;
   };
   const sorted = [...wardrobe].sort((left, right) => preferenceScore(right) - preferenceScore(left) || Math.abs(left.formality - target) - Math.abs(right.formality - target));
-  const choices = (category: string) => sorted.filter((item) => item.category === category);
+  const choices = (category: string) => sorted.filter((item) => inferredCategory(item) === category);
   const tops = choices("Tops"), bottoms = choices("Bottoms"), shoes = choices("Shoes");
-  const finishers = shoes.length ? shoes : choices("Accessories");
+  const finishers = shoes.length ? shoes : choices("Accessories").filter((item) => inferredCategory(item) === "Accessories");
   const candidates = tops.flatMap((top) => bottoms.flatMap((bottom) => finishers.length ? finishers.map((finisher) => [top, bottom, finisher]) : [[top, bottom]]));
   const previous = previousItemSets.map((itemIds) => new Set(itemIds));
   const pieces = [...candidates]
@@ -71,11 +84,11 @@ function localOutfit(wardrobe: Garment[], occasion: string, note: string, person
       const preferenceFit = (candidate: Garment[]) => candidate.reduce((total, item) => total + preferenceScore(item), 0);
       return overlap(left) - overlap(right) || Number(colorConflict(left)) - Number(colorConflict(right)) || preferenceFit(right) - preferenceFit(left) || formalityDistance(left) - formalityDistance(right);
     })[0] || [tops[0], bottoms[0], shoes[0]].filter((item): item is Garment => Boolean(item));
-  if (pieces.length < 2) pieces.push(...sorted.filter((item) => !pieces.some((piece) => piece.id === item.id)).slice(0, 3 - pieces.length));
   const plan = note.trim() || `${occasion.toLowerCase()} plans`;
   const title = note ? plan.replace(/^(i\s+(want|wanna)\s+to\s+have|going)\s+/i, "").replace(/^a\s+/i, "").slice(0, 64) : `${occasion} look`;
   const profileDetail = personalization.preferredStyles ? ` It also leans into your ${personalization.preferredStyles} preferences.` : "";
-  return { id: crypto.randomUUID(), title: title.replace(/^./, (letter) => letter.toUpperCase()), itemIds: pieces.map((item) => item.id), reasoning: `A temporary wardrobe-only suggestion for ${plan}. The live stylist could not respond in time, so this avoids repeated pieces, your saved colour dislikes, and a near-black/navy clash.${profileDetail}`, createdAt: new Date().toISOString(), occasion };
+  const completePieces = isCompleteOutfit(pieces) ? pieces : [tops[0], bottoms[0]].filter((item): item is Garment => Boolean(item));
+  return { id: crypto.randomUUID(), title: title.replace(/^./, (letter) => letter.toUpperCase()), itemIds: completePieces.map((item) => item.id), reasoning: `A temporary wardrobe-only suggestion for ${plan}. The live stylist could not respond in time, so this avoids repeated pieces, your saved colour dislikes, and a near-black/navy clash.${profileDetail}`, createdAt: new Date().toISOString(), occasion };
 }
 
 function App() {
@@ -154,7 +167,7 @@ function Workspace({ user, onUserChange, onSignOut }: { user: User; onUserChange
   }, []);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => window.clearTimeout(timer); }, [toast]);
 
-  const visible = category === "All" ? wardrobe : wardrobe.filter((item) => item.category === category);
+  const visible = category === "All" ? wardrobe : wardrobe.filter((item) => inferredCategory(item) === category);
   const outfitItems = outfit ? outfit.itemIds.map((id) => wardrobe.find((item) => item.id === id)).filter((item): item is Garment => Boolean(item)) : [];
 
   async function addPhotos(files: FileList | null) {
@@ -180,7 +193,10 @@ function Workspace({ user, onUserChange, onSignOut }: { user: User; onUserChange
       const returnedIds = result.outfit?.itemIds as string[] | undefined;
       const returnedKey = returnedIds ? [...returnedIds].sort().join("|") : "";
       const knownKeys = new Set(previousItemSets.map((itemIds) => [...itemIds].sort().join("|")));
-      if (returnedIds?.length && !knownKeys.has(returnedKey)) next = { ...next, ...result.outfit, id: crypto.randomUUID(), createdAt: new Date().toISOString(), occasion };
+      const returnedItems = returnedIds?.map((id) => wardrobe.find((item) => item.id === id)).filter((item): item is Garment => Boolean(item)) || [];
+      const returnedRoles = returnedItems.map(inferredCategory);
+      const validReturnedOutfit = returnedIds?.length === returnedItems.length && returnedRoles.includes("Tops") && returnedRoles.includes("Bottoms") && returnedRoles.filter((itemRole) => itemRole === "Bottoms").length === 1;
+      if (validReturnedOutfit && !knownKeys.has(returnedKey)) next = { ...next, ...result.outfit, id: crypto.randomUUID(), createdAt: new Date().toISOString(), occasion };
     } catch { /* The local selector remains responsive when the AI is slow or unavailable. */ }
     setGeneratedSets((sets) => [...sets.slice(-7), next.itemIds]);
     setOutfit(next); setLoading(false);
