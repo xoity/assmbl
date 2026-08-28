@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Archive, ArchiveRestore, ArrowRight, Camera, Check, ChevronRight, CloudSun, Heart, LoaderCircle, LogOut, Pencil, Plus, Settings2, Shirt, Sparkles, ThumbsDown, ThumbsUp, Trash2, Upload, UserRound, X } from "lucide-react";
 import "./styles.css";
 
@@ -13,6 +13,16 @@ const categories = ["All", "Tops", "Bottoms", "Shoes", "Jackets", "Accessories"]
 const occasions = ["Casual", "Work", "Dinner", "Date", "Going out", "Formal", "Gym"];
 const occasionFormality: Record<string, number> = { Gym: 1, Casual: 2, Date: 3, Dinner: 3, "Going out": 3, Work: 4, Formal: 5 };
 const emptyPersonalization: Personalization = { skinTone: "", eyeColor: "", hairColor: "", preferredStyles: "", colorsToAvoid: "", fitPreference: "", styleBiography: "", completed: false };
+const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || "0x4AAAAAAEfUNwdMf9xmWagw";
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (element: HTMLElement, options: { sitekey: string; action: string; callback: (token: string) => void; "error-callback": () => void; "expired-callback": () => void }) => string;
+      reset: (widgetId: string) => void;
+    };
+  }
+}
 
 function inferredCategory(item: Pick<Garment, "name" | "type" | "category">) {
   const details = `${item.name} ${item.type}`.toLowerCase();
@@ -121,21 +131,57 @@ function Landing({ onStart, onSignIn }: { onStart: () => void; onSignIn: () => v
   </main>;
 }
 
+function TurnstileBox({ action, onToken, resetSignal }: { action: "signup" | "login"; onToken: (token: string) => void; resetSignal: number }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!turnstileSiteKey) return;
+    const scriptId = "cloudflare-turnstile-script";
+    const renderWidget = () => {
+      if (!containerRef.current || !window.turnstile || widgetIdRef.current) return;
+      widgetIdRef.current = window.turnstile.render(containerRef.current, { sitekey: turnstileSiteKey, action, callback: onToken, "error-callback": () => onToken(""), "expired-callback": () => onToken("") });
+    };
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existing) {
+      if (window.turnstile) renderWidget();
+      else existing.addEventListener("load", renderWidget, { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.addEventListener("load", renderWidget, { once: true });
+    document.head.appendChild(script);
+  }, [action, onToken]);
+
+  useEffect(() => {
+    if (widgetIdRef.current && window.turnstile) window.turnstile.reset(widgetIdRef.current);
+  }, [resetSignal]);
+
+  return <div className="turnstile-box" ref={containerRef} />;
+}
+
 function AuthScreen({ mode, onBack, onAuthed, onSwitch }: { mode: "signin" | "signup"; onBack: () => void; onAuthed: (user: User) => void; onSwitch: () => void }) {
   const [name, setName] = useState("Mohammad");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetSignal, setTurnstileResetSignal] = useState(0);
   const isSignup = mode === "signup";
   async function submit(event: FormEvent) {
     event.preventDefault(); setPending(true); setError("");
     try {
-      const result = await requestJson(`/api/auth/${isSignup ? "signup" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(isSignup ? { name, email, password } : { email, password }) });
+      if (!turnstileToken) throw new Error("Please complete the security check.");
+      const result = await requestJson(`/api/auth/${isSignup ? "signup" : "login"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(isSignup ? { name, email, password, "cf-turnstile-response": turnstileToken } : { email, password, "cf-turnstile-response": turnstileToken }) });
       onAuthed(result.user);
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Could not continue."); } finally { setPending(false); }
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Could not continue."); } finally { setPending(false); setTurnstileToken(""); setTurnstileResetSignal((value) => value + 1); }
   }
-  return <main className="auth-page"><button className="brand-mark auth-brand" onClick={onBack}>assmbl<span>.</span></button><section className="auth-panel reveal"><button className="back-button" onClick={onBack}>← Back</button><span className="eyebrow">{isSignup ? "YOUR WARDROBE STARTS HERE" : "WELCOME BACK"}</span><h1>{isSignup ? <>Make space for<br /><em>your style.</em></> : <>Good to have<br /><em>you back.</em></>}</h1><p>{isSignup ? "Create a private account and start building the wardrobe you will actually use." : "Sign in to pick up where you left off."}</p><form onSubmit={submit}>{isSignup && <label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={isSignup ? "new-password" : "current-password"} minLength={8} required /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button auth-submit" disabled={pending}>{pending ? <LoaderCircle className="spin" size={17} /> : null}{isSignup ? "Create account" : "Sign in"}<ArrowRight size={17} /></button></form><p className="auth-switch">{isSignup ? "Already have an account?" : "New here?"} <button onClick={onSwitch}>{isSignup ? "Sign in" : "Create one"}</button></p></section><aside className="auth-aside"><img src="https://images.unsplash.com/photo-1496217590455-aa63a8350eea?auto=format&fit=crop&w=1100&q=85" alt="Clothing arranged on a rail" /><p>“A little less thinking.<br />A lot more wearing.”</p></aside></main>;
+  return <main className="auth-page"><button className="brand-mark auth-brand" onClick={onBack}>assmbl<span>.</span></button><section className="auth-panel reveal"><button className="back-button" onClick={onBack}>← Back</button><span className="eyebrow">{isSignup ? "YOUR WARDROBE STARTS HERE" : "WELCOME BACK"}</span><h1>{isSignup ? <>Make space for<br /><em>your style.</em></> : <>Good to have<br /><em>you back.</em></>}</h1><p>{isSignup ? "Create a private account and start building the wardrobe you will actually use." : "Sign in to pick up where you left off."}</p><form onSubmit={submit}>{isSignup && <label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={isSignup ? "new-password" : "current-password"} minLength={8} required /></label><TurnstileBox action={isSignup ? "signup" : "login"} onToken={setTurnstileToken} resetSignal={turnstileResetSignal} />{error && <p className="form-error">{error}</p>}<button className="primary-button auth-submit" disabled={pending || !turnstileToken}>{pending ? <LoaderCircle className="spin" size={17} /> : null}{isSignup ? "Create account" : "Sign in"}<ArrowRight size={17} /></button></form><p className="auth-switch">{isSignup ? "Already have an account?" : "New here?"} <button onClick={() => { setTurnstileToken(""); setTurnstileResetSignal((value) => value + 1); onSwitch(); }}>{isSignup ? "Sign in" : "Create one"}</button></p></section><aside className="auth-aside"><img src="https://images.unsplash.com/photo-1496217590455-aa63a8350eea?auto=format&fit=crop&w=1100&q=85" alt="Clothing arranged on a rail" /><p>“A little less thinking.<br />A lot more wearing.”</p></aside></main>;
 }
 
 function Workspace({ user, onUserChange, onSignOut }: { user: User; onUserChange: (user: User) => void; onSignOut: () => void }) {

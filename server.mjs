@@ -22,6 +22,10 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || (isProduction ? "https://
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const turnstileHostnames = (process.env.TURNSTILE_HOSTNAMES || (isProduction ? "assmbl.abukhader.cloud" : "localhost,127.0.0.1"))
+  .split(",")
+  .map((hostname) => hostname.trim())
+  .filter(Boolean);
 
 if (isProduction && !process.env.DATABASE_URL) throw new Error("DATABASE_URL is required in production.");
 if (process.env.TRUST_PROXY !== "false") app.set("trust proxy", 1);
@@ -108,7 +112,7 @@ function isAllowedOrigin(origin) {
   return allowedOrigins.includes(origin);
 }
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], connectSrc: ["'self'"], imgSrc: ["'self'", "data:", "https://images.unsplash.com"], styleSrc: ["'self'", "https://fonts.googleapis.com", "'unsafe-inline'"], fontSrc: ["'self'", "https://fonts.gstatic.com"], scriptSrc: ["'self'"], objectSrc: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"], frameAncestors: ["'none'"], upgradeInsecureRequests: isProduction ? [] : null } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], connectSrc: ["'self'"], frameSrc: ["'self'", "https://challenges.cloudflare.com"], imgSrc: ["'self'", "data:", "https://images.unsplash.com"], styleSrc: ["'self'", "https://fonts.googleapis.com", "'unsafe-inline'"], fontSrc: ["'self'", "https://fonts.gstatic.com"], scriptSrc: ["'self'", "https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"], frameAncestors: ["'none'"], upgradeInsecureRequests: isProduction ? [] : null } } }));
 app.use(compression());
 app.use(cors({ origin: (origin, callback) => callback(isAllowedOrigin(origin) ? null : new Error("Origin is not allowed."), origin || false), credentials: true }));
 app.use((request, response, next) => {
@@ -167,7 +171,31 @@ async function clearSession(request, response) {
   response.clearCookie("assmbl_session", { path: "/" });
 }
 
+async function verifyTurnstile(request, response, expectedAction) {
+  const token = request.body?.["cf-turnstile-response"];
+  if (typeof token !== "string" || token.length === 0 || token.length > 2048 || !process.env.TURNSTILE_SECRET || turnstileHostnames.length === 0) {
+    response.status(403).json({ error: "Complete the security check and try again." });
+    return false;
+  }
+  try {
+    const verification = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      signal: AbortSignal.timeout(10000),
+      body: new URLSearchParams({ secret: process.env.TURNSTILE_SECRET, response: token, remoteip: request.ip })
+    });
+    if (!verification.ok) throw new Error(`siteverify ${verification.status}`);
+    const result = await verification.json();
+    if (result.success === true && result.action === expectedAction && turnstileHostnames.includes(result.hostname)) return true;
+  } catch (error) {
+    console.error(error);
+  }
+  response.status(403).json({ error: "Complete the security check and try again." });
+  return false;
+}
+
 app.post("/api/auth/signup", async (request, response, next) => {
+  if (!await verifyTurnstile(request, response, "signup")) return;
   const name = String(request.body?.name || "").trim();
   const email = String(request.body?.email || "").trim().toLowerCase();
   const password = String(request.body?.password || "");
@@ -198,6 +226,7 @@ app.post("/api/auth/signup", async (request, response, next) => {
 });
 
 app.post("/api/auth/login", async (request, response) => {
+  if (!await verifyTurnstile(request, response, "login")) return;
   const email = String(request.body?.email || "").trim().toLowerCase();
   const password = String(request.body?.password || "");
   const user = await one("SELECT * FROM users WHERE email = $1", [email]);
