@@ -144,3 +144,11 @@ dist
 # End of https://www.toptal.com/developers/gitignore/api/node
 
 closetly*
+*.png
+*.jpg
+*.jpeg
+*.webp
+!.github/**/*.png
+!.github/**/*.jpg
+!.github/**/*.jpeg
+!.github/**/*.webp
