@@ -1,5 +1,5 @@
 {
-  "name": "closetly-mvp",
+  "name": "assmbl",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,12 +10,14 @@
     "server": "node server.mjs"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@types/express": "^5.0.1",
