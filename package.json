@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently \"vite\" \"node server.mjs\"",
+    "install": "node -e \"console.log('dependencies installed')\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "start": "NODE_ENV=production node server.mjs",
