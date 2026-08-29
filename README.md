@@ -73,6 +73,7 @@ The `npm run install` script is intentionally a no-op for Coolify compatibility 
 | `DATABASE_URL` | Postgres connection string |
 | `DATABASE_POOL_MAX` | Max Postgres pool connections |
 | `DATABASE_SSL` | Set to `true` if your Postgres endpoint requires SSL |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED` | Set to `false` only in development for self-signed certs; certificate verification is always enforced in production |
 | `ALLOWED_ORIGINS` | Comma-separated allowed browser origins |
 | `TRUST_PROXY` | Set to `true` behind Coolify/reverse proxy |
 | `OPENCODE_GO_API_KEY` | Server-only API key for model calls |

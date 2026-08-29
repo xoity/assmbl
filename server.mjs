@@ -30,11 +30,17 @@ const turnstileHostnames = (process.env.TURNSTILE_HOSTNAMES || (isProduction ? "
 if (isProduction && !process.env.DATABASE_URL) throw new Error("DATABASE_URL is required in production.");
 if (process.env.TRUST_PROXY !== "false") app.set("trust proxy", 1);
 
+// TLS certificate verification is always enabled in production. It may only be
+// disabled explicitly during development (e.g. self-signed local certificates)
+// by setting DATABASE_SSL_REJECT_UNAUTHORIZED=false.
+const databaseSsl = process.env.DATABASE_SSL === "true";
+const rejectUnauthorized = !(databaseSsl && !isProduction && process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "false");
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/assmbl",
   max: Number(process.env.DATABASE_POOL_MAX || 10),
   idleTimeoutMillis: 30000,
-  ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : false
+  ssl: databaseSsl ? { rejectUnauthorized } : false
 });
 
 async function initDatabase() {
